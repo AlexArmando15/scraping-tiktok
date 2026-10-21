@@ -1,0 +1,17 @@
+# Variables de entorno sensibles - NUNCA subir a GitHub
+.env
+
+# CSVs generados por el script
+*.csv
+
+# Cache de Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Playwright browsers (opcional, son pesados)
+# playwright/
+
+# IDEs
+.vscode/
+.idea/
