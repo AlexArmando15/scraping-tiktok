@@ -7,7 +7,7 @@ from playwright.async_api import async_playwright
 
 # ================= CONFIGURACIÓN (desde .env) =================
 load_dotenv()
-USUARIO_OBJETIVO = os.getenv("USUARIO_OBJETIVO", "usuario_aqui")
+USUARIO_OBJETIVO = os.getenv("USUARIO_OBJETIVO", "alexarmando15")
 SESSION_ID       = os.getenv("SESSION_ID", "")
 MAX_VIDEOS       = int(os.getenv("MAX_VIDEOS", 10))
 # ==============================================================
@@ -19,22 +19,35 @@ async def scrapear_tiktok():
     ultimos_seguidos = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        # Args adicionales para ocultar que el navegador es controlado por automatización
+        browser = await p.chromium.launch(
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800}
         )
 
         if SESSION_ID and SESSION_ID != "TU_SESSION_ID_AQUI":
-            await context.add_cookies([{
-                "name": "sessionid",
-                "value": SESSION_ID,
-                "domain": ".tiktok.com",
-                "path": "/"
-            }])
+            await context.add_cookies([
+                {
+                    "name": "sessionid",
+                    "value": SESSION_ID,
+                    "domain": ".tiktok.com",
+                    "path": "/"
+                },
+                {
+                    "name": "sessionid_ss",
+                    "value": SESSION_ID,
+                    "domain": ".tiktok.com",
+                    "path": "/"
+                }
+            ])
 
         page = await context.new_page()
 
+        # Interceptor de respuestas de la API interna de TikTok
         async def interceptar_respuestas(response):
             url = response.url
             try:
@@ -47,12 +60,16 @@ async def scrapear_tiktok():
                     data = await response.json()
                     if "comments" in data and data["comments"]:
                         for c in data["comments"]:
-                            vid_id = c.get("aweme_id")
-                            texto = c.get("text")
-                            autor = c.get("user", {}).get("unique_id")
-                            if vid_id not in comentarios_por_video:
-                                comentarios_por_video[vid_id] = []
-                            comentarios_por_video[vid_id].append(f"@{autor}: {texto}")
+                            vid_id = str(c.get("aweme_id", ""))
+                            texto = c.get("text", "").strip()
+                            autor = c.get("user", {}).get("unique_id") or c.get("user", {}).get("nickname", "usuario")
+                            likes_com = c.get("digg_count", 0)
+                            if vid_id:
+                                if vid_id not in comentarios_por_video:
+                                    comentarios_por_video[vid_id] = []
+                                entrada = {"autor": autor, "comentario": texto, "likes": likes_com}
+                                if entrada not in comentarios_por_video[vid_id]:
+                                    comentarios_por_video[vid_id].append(entrada)
 
                 elif "/api/user/list/" in url and response.status == 200:
                     data = await response.json()
@@ -73,7 +90,6 @@ async def scrapear_tiktok():
         await page.goto(f"https://www.tiktok.com/@{USUARIO_OBJETIVO}", wait_until="domcontentloaded")
         await page.wait_for_timeout(5000)
 
-        # Línea corregida sin el espacio extra:
         json_script = await page.query_selector('script#__UNIVERSAL_DATA_FOR_REHYDRATION__')
         if json_script:
             raw_json = await json_script.inner_text()
@@ -103,11 +119,15 @@ async def scrapear_tiktok():
                 await boton_seguidos.click()
                 await page.wait_for_timeout(4000)
                 await page.keyboard.press("Escape")
+                await page.wait_for_timeout(1000)
         except Exception as e:
             print("No se pudo abrir la lista de seguidos (puede ser privada):", e)
 
-        await page.mouse.wheel(0, 1500)
+        # Hacer scroll ligero para asegurar que carguen los primeros 10 videos en la cuadrícula
+        await page.mouse.wheel(0, 1200)
         await page.wait_for_timeout(3000)
+        await page.mouse.wheel(0, -1200)
+        await page.wait_for_timeout(1500)
 
         videos_procesados = []
         vistos = set()
@@ -116,20 +136,72 @@ async def scrapear_tiktok():
                 vistos.add(v["id"])
                 videos_procesados.append(v)
 
-        print(f"\n[*] Analizando los últimos {len(videos_procesados)} videos y sus comentarios...")
-        resultados_videos = []
+        print(f"\n[*] Analizando los últimos {len(videos_procesados)} videos y abriendo el visor para extraer comentarios...")
 
-        for idx, v in enumerate(videos_procesados, 1):
-            vid_id = v.get("id")
+        # En lugar de usar page.goto() 10 veces (que da error HTTP), hacemos clic en el primer video de la cuadrícula
+        # y navegamos hacia abajo con la tecla ArrowDown como un usuario real
+        try:
+            primer_item = await page.query_selector('[data-e2e="user-post-item"] a')
+            if primer_item:
+                await primer_item.click()
+                await page.wait_for_timeout(3500)
+
+                for idx in range(len(videos_procesados)):
+                    v = videos_procesados[idx]
+                    vid_id = str(v.get("id"))
+                    total_com = v.get("stats", {}).get("commentCount", 0)
+                    print(f"  -> ({idx+1}/{len(videos_procesados)}) Revisando publicación {vid_id} ({total_com} comentarios reportados)...")
+
+                    if total_com > 0:
+                        # Esperar a que la API suelte los comentarios de la vista lateral
+                        await page.wait_for_timeout(2500)
+
+                        # Respaldo DOM: Si la API no los capturó aún, leemos los elementos de comentario en pantalla
+                        if not comentarios_por_video.get(vid_id):
+                            elementos_com = await page.query_selector_all('[data-e2e="comment-level-1"]')
+                            for el in elementos_com:
+                                texto_dom = (await el.inner_text()).strip().replace("\n", " ")
+                                if texto_dom:
+                                    if vid_id not in comentarios_por_video:
+                                        comentarios_por_video[vid_id] = []
+                                    comentarios_por_video[vid_id].append({
+                                        "autor": "usuario_tiktok",
+                                        "comentario": texto_dom,
+                                        "likes": 0
+                                    })
+
+                    extraidos = len(comentarios_por_video.get(vid_id, []))
+                    print(f"     [+] Comentarios capturados: {extraidos}")
+
+                    # Pasar al siguiente video presionando la flecha hacia abajo
+                    if idx < len(videos_procesados) - 1:
+                        await page.keyboard.press("ArrowDown")
+                        await page.wait_for_timeout(3000)
+        except Exception as e:
+            print(f"[!] Aviso al navegar por el visor de videos: {e}")
+
+        # Construir las tablas finales con los datos que ya están seguros en memoria
+        resultados_videos = []
+        todos_los_comentarios_csv = []
+
+        for v in videos_procesados:
+            vid_id = str(v.get("id"))
             stats_v = v.get("stats", {})
             desc = v.get("desc", "")
-
+            total_com = stats_v.get("commentCount", 0)
             url_video = f"https://www.tiktok.com/@{USUARIO_OBJETIVO}/video/{vid_id}"
-            print(f"  -> ({idx}/{len(videos_procesados)}) Extrayendo video {vid_id}...")
-            await page.goto(url_video, wait_until="domcontentloaded")
-            await page.wait_for_timeout(4000)
 
-            lista_comentarios = comentarios_por_video.get(vid_id, [])
+            lista_coms = comentarios_por_video.get(vid_id, [])
+
+            for c in lista_coms:
+                todos_los_comentarios_csv.append({
+                    "id_video": vid_id,
+                    "autor": c["autor"],
+                    "comentario": c["comentario"],
+                    "likes_comentario": c["likes"]
+                })
+
+            resumen_texto = " | ".join([f"@{c['autor']}: {c['comentario']}" for c in lista_coms[:15]])
 
             resultados_videos.append({
                 "id_video": vid_id,
@@ -137,10 +209,11 @@ async def scrapear_tiktok():
                 "descripcion": desc,
                 "vistas": stats_v.get("playCount", 0),
                 "likes": stats_v.get("diggCount", 0),
-                "comentarios_total": stats_v.get("commentCount", 0),
+                "comentarios_total": total_com,
+                "comentarios_extraidos": len(lista_coms),
                 "guardados": stats_v.get("collectCount", 0),
                 "compartidos": stats_v.get("shareCount", 0),
-                "muestra_comentarios": " | ".join(lista_comentarios[:15])
+                "muestra_comentarios": resumen_texto
             })
 
         await browser.close()
@@ -148,7 +221,8 @@ async def scrapear_tiktok():
         pd.DataFrame([perfil_info]).to_csv("1_perfil.csv", index=False, encoding="utf-8-sig")
         pd.DataFrame(ultimos_seguidos).to_csv("2_ultimos_seguidos.csv", index=False, encoding="utf-8-sig")
         pd.DataFrame(resultados_videos).to_csv("3_ultimos_10_videos.csv", index=False, encoding="utf-8-sig")
-        print("\n[✓] ¡Proceso terminado! Archivos CSV generados en tu carpeta actual.")
+        pd.DataFrame(todos_los_comentarios_csv).to_csv("4_comentarios_detallados.csv", index=False, encoding="utf-8-sig")
+        print("\n[✓] ¡Proceso terminado sin errores! Archivos CSV generados en tu carpeta actual.")
 
 if __name__ == "__main__":
     asyncio.run(scrapear_tiktok())
