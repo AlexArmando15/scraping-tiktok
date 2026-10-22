@@ -72,3 +72,12 @@ El navegador se abrirá automáticamente, navegará por el perfil y al terminar 
 | `playwright` | Automatización del navegador |
 | `pandas` | Generación de archivos CSV |
 | `python-dotenv` | Lectura del archivo `.env` |
+
+## ▶️ Video de ejecución 
+
+
+https://github.com/user-attachments/assets/7f24db35-a5c3-4f9e-9860-37816f1675c0
+
+
+
+
