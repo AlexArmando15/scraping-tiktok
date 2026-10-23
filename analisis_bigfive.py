@@ -48,6 +48,7 @@ Realiza un análisis completo estructurado en las siguientes secciones:
    - Extraversión (Extraversion)
    - Amabilidad (Agreeableness)
    - Neuroticismo / Sensibilidad emocional (Neuroticism)
+    Incluye al final de la tabla una fila de **TOTAL** que muestre **100%**. (Verifica matemáticamente antes de responder que la suma de los 5 valores sea exactamente 100%).
 
 2. JUSTIFICACIÓN CON EVIDENCIA:
    Explica por qué asignaste cada porcentaje citando ejemplos textuales de los comentarios (desahogos emocionales, letras de canciones, empatía o emojis).
